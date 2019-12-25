@@ -34,6 +34,8 @@ int chooseHostname(char *buffer, size_t len)
     return 5;
 }
 
+
+
 int main(int argc, char **argv)
 {
     int err = 0;
@@ -67,6 +69,37 @@ int main(int argc, char **argv)
         lastOptind = optind;
     }
 
+    fprintf(stderr, "=> calidating Linux version...");
+    struct utsname host = { 0 };
+    if (uname(&host))
+    {
+        fprintf(stderr, "failed: %m\n");
+        goto cleanup;
+    }
+
+    int major = -1;
+    int minor = -1;
+
+    if (sscanf(host.release, "%u.%u", &major, &minor) != 2)
+    {
+        fprintf(stderr, "weird release format: %s\n", host.release);
+        goto cleanup;
+    }
+
+    if (major != 4 || (minor != 7 && minor != 8))
+    {
+        fprintf(stderr, "expected 4.7.x or 4.8.x: %s\n", host.release);
+        goto cleanup;
+    }
+
+    if (strcmp("X86_64", host.machine))
+    {
+        fprintf(stderr, "expected X86_64: %s\n", host.machine);
+        goto cleanup;
+    }
+
+    fprintf(stderr, "%s on %s.\n", host.release,host.machine);
+
     finish_options:
         if (!config.argc) goto usage;
         if (!config.mountDir) goto usage;
@@ -88,5 +121,6 @@ int main(int argc, char **argv)
         if (sockets[1]) close(sockets[1]);
         return err;
 
+    
     return 0;
 }
