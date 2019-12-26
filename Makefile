@@ -1,11 +1,14 @@
 C=gcc
 CFLAGS=-Wall -Werror -lcap -lseccomp
 SOURCES=src/contained.c
+PROGRAM=contained
+.PHONY:	build
+.PHONY:	clean
 
-all: contained
+build:	$(PROGRAM)
 
-contained: 
-	$(C) $(CFLAGS) $(SOURCES) -o contained
+$(PROGRAM):	$(SOURCES)
+	$(C) $(CFLAGS) $(SOURCES) -o $(PROGRAM)
 
-clean:
-	rm -rf *.o contained 
+clean: 
+	rm -rf $(PROGRAM)
