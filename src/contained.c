@@ -22,6 +22,9 @@
 #include <linux/limits.h>
 
 #define STCK_SIZE (1024 * 1024)
+#define USERNS_OFFSET 10000
+#define USERNS_COUNT 2000
+
 #define cleanup()   if (sockets[0]) close(sockets[0]); \
                     if (sockets[1]) close(sockets[1]);\
                     return err;
@@ -47,8 +50,90 @@ struct childConfig {
     char *mountDir;
 };
 
-int handleChildUIDMap(pid_t child, int fd)
+int handleChildUIDMap(pid_t childPID, int fd)
 {
+    int uidMap = 0;
+    int hasUserns = -1;
+
+    if (read(fd, &hasUserns, sizeof(hasUserns)) != sizeof(hasUserns))   
+    {
+        fprintf(stderr, "couldnt read child\n");
+        return -1;
+    }
+
+    if (hasUserns)
+    {
+        char path[PATH_MAX] = {0};
+
+        for (char **file = (char*[]) { "uidMapm", "gidMap", 0 }; *file; file++)
+        {
+            if (snprintf(path, sizeof(path), "/proc/%d/%s", childPID, *file) > sizeof(path))
+            {
+                fprintf(stderr, "snprintf too big ? %m\n");
+                return -1;
+            }
+
+            fprintf(stderr, "writing %s...", path);
+
+            if ((uidMap = open(path, O_WRONLY)) == -1)
+            {
+                fprintf(stderr, "open failed: %m\n");
+                return -1;
+            }
+
+            if (dprintf(uidMap, "0 %d %d\n", USERNS_OFFSET, USERNS_COUNT) == -1)
+            {
+                fprintf(stderr, "dprintf failed: %m\n");
+                close(uidMap);
+                return -1;
+            }
+
+            close(uidMap);
+        }
+
+        if (write(fd, &(int){0}, sizeof(int)) != sizeof(int))
+        {
+            fprintf(stderr, "couldnt write: %m\n");
+            return -1;
+        }
+    }
+
+    return 0;
+}
+
+int userns(struct childConfig *cnf)
+{
+    fprintf(stderr, "=> trying a user namespace");
+    
+    int hasUserns = !unshare(CLONE_NEWUSER);
+    int result = 0;
+
+    if (write(cnf->fd, &hasUserns, sizeof(hasUserns)) != sizeof(hasUserns))
+    {
+        fprintf(stderr, "couldnt write: %m\n");
+        return -1;
+    }
+
+    if (read(cnf->fd, &result, sizeof(result)) != sizeof(resources))
+    {
+        fprintf(stderr, "couldnt read: %m\n");
+        return -1;
+    }
+
+    if (result) return -1;
+
+    hasUserns ? fprintf(stderr, "done\n"):fprintf(stderr, "unsupported? continuing\n");}
+
+    fprintf(stderr, "switching to uid %d / gid %d", cnf->uid, cnf->uid);
+
+    if (setgroups(1, &(gid_t){ cnf->uid}) || setresgid(cnf->uid, cnf->uid, cnf->uid) ||
+    setresuid(cnf->uid, cnf->uid, cnf->uid))
+    {
+        fprintf(stderr, "%m\n");
+        return -1;
+    }
+
+    fprintf(stderr, "done\n");
     return 0;
 }
 
@@ -62,8 +147,40 @@ int resources(struct childConfig *config)
     return 0;
 }
 
+int mounts(struct cildConfig *config) 
+{
+    // TODO: создать времены и вложеный в него каталог, сонтировать корень во внутрений каталог, во время завершения работы сделать umount и удалить каталоги
+    return 0;
+}
+
+int capabilities()
+{
+    return 0;
+}
+
 int child(void *arg)
 {
+    struct childConfig *cnf = arg;
+
+    if (sethostname(cnf->hostName, strlen(cnf->hostName)) || mount(cnf) || userns(cnf)
+    || capabilities() || syscall())
+    {
+        close(cnf->fd);
+        return -1;
+    }
+
+    if (close(cnf->fd))
+    {
+        fprintf(stderr, "close failed: %m\n");
+        return -1;
+    }
+
+    if (execve(cnf->argv[0], cnf->argv, NULL))
+    {
+        fprintf(stderr, "execve failed %m\n");
+        return -1;
+    }
+
     return 0;
 }
 
@@ -87,8 +204,6 @@ int chooseHostname(char *buffer, size_t len)
     }
     return 0;
 }
-
-
 
 int main(int argc, char **argv)
 {
@@ -131,10 +246,11 @@ int main(int argc, char **argv)
         lastOptind = optind;
     }
 
-
     //проверка версии ос
     fprintf(stderr, "=> calidating Linux version...");
+    // создаем экземпляр структуры в которой определена информация о ОС и обнуляем его 
     struct utsname host = { 0 };
+    // записываем системную информацию в наш экземпляр
     if (uname(&host))
     {
         fprintf(stderr, "failed: %m\n");
@@ -143,28 +259,29 @@ int main(int argc, char **argv)
 
     int major = -1;
     int minor = -1;
-
+    // записываем первые два значений релиза ядра в переменные 
     if (sscanf(host.release, "%u.%u", &major, &minor) != 2)
     {
         fprintf(stderr, "weird release format: %s\n", host.release);
         cleanup();
     }
 
-    if (major != 4 || (minor != 7 && minor != 8))
+    // проверяем версию ядра
+    if (major != 5 || (minor != 0))
     {
-        fprintf(stderr, "expected 4.7.x or 4.8.x: %s\n", host.release);
+        fprintf(stderr, "expected 5.0.x %s\n", host.release);
         cleanup();
     }
 
-    if (strcmp("X86_64", host.machine))
+    // проверяем работает ли ОС на арх х86_64 
+    if (strcmp("x86_64", host.machine))
     {
-        fprintf(stderr, "expected X86_64: %s\n", host.machine);
+        fprintf(stderr, "expected x86_64: %s\n", host.machine);
         cleanup();
     }
 
-    fprintf(stderr, "%s on %s.\n", host.release,host.machine);
-    
-    //пользовательское пространство
+    fprintf(stderr, "%s on %s\n", host.release, host.machine);
+
     if (socketpair(AF_LOCAL, SOCK_SEQPACKET, 0, sockets))
     {
         fprintf(stderr, "socketpair failed: %m\n");
@@ -201,7 +318,6 @@ int main(int argc, char **argv)
 
     close(sockets[1]);
     sockets[1] = 0;
-
 
     return 0;
 }
