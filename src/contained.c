@@ -162,6 +162,40 @@ int mounts(struct childConfig *config)
 
 int capabilities()
 {
+    fprintf(stderr, "=> droping capabilities");
+
+    int dropCaps[] = { CAP_AUDIT_CONTROL, CAP_AUDIT_READ, CAP_AUDIT_WRITE, CAP_BLOCK_SUSPEND, CAP_FSETID, CAP_IPC_LOCK, 
+    CAP_MAC_ADMIN, CAP_MAC_OVERRIDE, CAP_MKNOD, CAP_SETFCAP, CAP_SYSLOG, CAP_SYS_ADMIN,
+    CAP_SYS_BOOT, CAP_SYS_MODULE, CAP_SYS_NICE, CAP_SYS_RAWIO, CAP_SYS_RESOURCE, CAP_SYS_TIME, CAP_WAKE_ALARM };
+
+    size_t numCaps = sizeof(dropCaps) / sizeof(*dropCaps);
+    cap_t caps = NULL;
+
+    fprintf(stderr, "bounding");
+
+    for (size_t i = 0; i < numCaps; i++)
+    {
+        if (prctl(PR_CAPBSET_DROP, dropCaps[i], 0, 0, 0))
+        {
+            fprintf(stderr, "prctl failed: %m\n");
+            return 1;
+        }
+    }
+    
+    fprintf(stderr, "inheritable");
+
+    if (!(caps = cap_get_proc()) ||
+        cap_set_flag(caps, CAP_INHERITABLE, numCaps, dropCaps, CAP_CLEAR)
+        || cap_set_proc(caps))
+        {
+            fprintf(stderr, "failed: %m\n");
+            if (caps) cap_free(caps);
+            return 1;
+        }
+
+    cap_free(caps);
+    fprintf(stderr, "done\n");
+
     return 0;
 }
 

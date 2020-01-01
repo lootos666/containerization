@@ -8,7 +8,7 @@ PROGRAM=contained
 build:	$(PROGRAM)
 
 $(PROGRAM):	$(SOURCES)
-	$(C) $(CFLAGS) $(SOURCES) -o $(PROGRAM)
+	$(C) $(SOURCES) $(CFLAGS) -o $(PROGRAM)
 
 clean: 
 	rm -rf $(PROGRAM)
