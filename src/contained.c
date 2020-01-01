@@ -114,7 +114,7 @@ int userns(struct childConfig *cnf)
         return -1;
     }
 
-    if (read(cnf->fd, &result, sizeof(result)) != sizeof(resources))
+    if (read(cnf->fd, &result, sizeof(result)) != sizeof(result))
     {
         fprintf(stderr, "couldnt read: %m\n");
         return -1;
@@ -122,7 +122,14 @@ int userns(struct childConfig *cnf)
 
     if (result) return -1;
 
-    hasUserns ? fprintf(stderr, "done\n"):fprintf(stderr, "unsupported? continuing\n");}
+    if (hasUserns)
+    {
+        fprintf(stderr, "done\n");
+    } 
+    else
+    {
+        fprintf(stderr, "unsupported? continuing\n");
+    }
 
     fprintf(stderr, "switching to uid %d / gid %d", cnf->uid, cnf->uid);
 
@@ -147,7 +154,7 @@ int resources(struct childConfig *config)
     return 0;
 }
 
-int mounts(struct cildConfig *config) 
+int mounts(struct childConfig *config) 
 {
     // TODO: создать времены и вложеный в него каталог, сонтировать корень во внутрений каталог, во время завершения работы сделать umount и удалить каталоги
     return 0;
@@ -158,12 +165,17 @@ int capabilities()
     return 0;
 }
 
+int syscalls()
+{
+    return 0;
+}
+
 int child(void *arg)
 {
     struct childConfig *cnf = arg;
 
-    if (sethostname(cnf->hostName, strlen(cnf->hostName)) || mount(cnf) || userns(cnf)
-    || capabilities() || syscall())
+    if (sethostname(cnf->hostName, strlen(cnf->hostName)) || mounts(cnf) || userns(cnf)
+    || capabilities() || syscalls())
     {
         close(cnf->fd);
         return -1;
