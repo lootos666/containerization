@@ -21,6 +21,7 @@
 #include <linux/capability.h>
 #include <linux/limits.h>
 
+#define SCMP_FAIL SCMP_ACT_ERRNO(EPERM)
 #define STCK_SIZE (1024 * 1024)
 #define USERNS_OFFSET 10000
 #define USERNS_COUNT 2000
@@ -31,7 +32,7 @@
 #define usage()     fprintf(stderr, "Usage: %s -u -l -m . -c /bin/sh ~\n", argv[0]);
 #define error()     err = 1;
 #define finish_options()    if (!config.argc) usage();\
-                            if (!config.mountDir) usage();\
+                            if (!config.dirMount) usage();\
                             char hostName[256] = {0};\
                             if (chooseHostname(hostName, sizeof(hostName))) error();\
                             config.hostName = hostName;\
@@ -47,7 +48,7 @@ struct childConfig {
     int fd;
     char *hostName;
     char **argv;
-    char *mountDir;
+    char *dirMount;
 };
 
 int handleChildUIDMap(pid_t childPID, int fd)
@@ -154,9 +155,75 @@ int resources(struct childConfig *config)
     return 0;
 }
 
-int mounts(struct childConfig *config) 
+int pivotRoot(const char *newRoot, const char *putOld)
 {
-    // TODO: создать времены и вложеный в него каталог, сонтировать корень во внутрений каталог, во время завершения работы сделать umount и удалить каталоги
+    return syscall(SYS_pivot_root, newRoot, putOld);
+}
+
+int mounts(struct childConfig *cnf) 
+{
+    fprintf(stderr, "=> remounting everything with ms private");
+
+    if (mount(NULL, "/", NULL, MS_REC | MS_PRIVATE, NULL))
+    {
+        fprintf(stderr, "failed! %m\n");
+        return -1;
+    }
+
+    fprintf(stderr, "remouted");    
+    fprintf(stderr, "=> making a tmp directory and a bind mount there");
+
+    char dirMount[] = "/tmp/tmp.XXXXXX";
+    char innerDirMount[] = "/tmp/tmp.XXXXXX/oldroot.XXXXXX";
+
+    if (!mkdtemp(dirMount))
+    {
+        fprintf(stderr, "failed making a directory\n");
+        return -1;
+    }
+
+    if (mount(cnf->dirMount, dirMount, NULL, MS_BIND | MS_PRIVATE, NULL))
+    {
+        fprintf(stderr, "bind mount failed\n");
+        return -1;
+    }
+
+    memcpy(innerDirMount, dirMount, sizeof(dirMount) - 1);
+
+    if (!mkdtemp(innerDirMount))
+    {
+        fprintf(stderr, "failed making the inner directory");
+        return -1;
+    }
+
+    fprintf(stderr, "done");
+
+    char *oldrootDir = basename(innerDirMount);
+    char oldroot[sizeof(innerDirMount) + 1] = { "/" };
+    strcpy(&oldroot[1], oldrootDir);
+
+    fprintf(stderr, "=> unmounting %s", oldroot);
+
+    if (chdir("/"))
+    {
+        fprintf(stderr, "chdir failed %m\n");
+        return -1;
+    }
+
+    if (umount2(oldroot, MNT_DETACH))
+    {
+        fprintf(stderr, "unmounting failed %m\n");
+        return -1;
+    }
+
+    if (rmdir(oldroot))
+    {
+        fprintf(stderr, "rmdir failed %m\n");
+        return -1;
+    }
+
+    fprintf(stderr, "done\n");
+
     return 0;
 }
 
@@ -201,6 +268,18 @@ int capabilities()
 
 int syscalls()
 {
+    scmp_filter_ctx ctx = NULL;
+
+    fprintf(stderr, "=> filtering syscalls");
+
+    if (!(ctx = seccomp_init(SCMP_ACT_ALLOW))
+        || seccomp_rule_add(ctx, SCMP_FAIL, SCMP_SYS(chmod), 1, SCMP_A1(SCMP_CMP_EQ, S_ISUID, S_ISUID)))
+    {
+        if (ctx) seccomp_release(ctx);
+        fprintf(stderr, "failed: %m\n");
+        return 1;
+    }
+
     return 0;
 }
 
@@ -277,7 +356,7 @@ int main(int argc, char **argv)
                 
                 finish_options();
             case 'm':
-                config.mountDir = optarg;
+                config.dirMount = optarg;
                 break;
             case 'u':
                 if (sscanf(optarg, "%d", &config.uid) != 1)
